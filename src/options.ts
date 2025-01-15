@@ -1,171 +1,286 @@
-import { isPackageExists } from 'local-pkg'
-import { Awaitable, getFileBasedRouteName, isArray, warn } from './core/utils'
+import { isPackageExists as isPackageInstalled } from 'local-pkg'
+import { getFileBasedRouteName, isArray, warn } from './core/utils'
 import type { TreeNode } from './core/tree'
 import { resolve } from 'pathe'
 import { EditableTreeNode } from './core/extendRoutes'
+import { type ParseSegmentOptions } from './core/treeNodeValue'
+import { type _Awaitable } from './utils'
 
+/**
+ * Options for a routes folder.
+ */
 export interface RoutesFolderOption {
   /**
-   * Path to the folder containing the components that should be used for routes.
+   * Folder to scan files that should be used for routes. **Cannot be a glob**, use the `path`, `filePatterns`, and
+   * `exclude` options to filter out files. This section will **be removed** from the resulting path.
    */
   src: string
 
-  // TODO: allow a function to customize based on the filepath
   /**
-   * Prefix to add to the route path. Defaults to `''`. Must **end with a slash** and **start without one**.
+   * Prefix to add to the route path **as is**. Defaults to `''`. Can also be a function
+   * to reuse parts of the filepath, in that case you should return a **modified version of the filepath**.
+   *
+   * @example
+   * ```js
+   * {
+   *   src: 'src/pages',
+   *   // this is equivalent to the default behavior
+   *   path: (file) => file.slice(file.lastIndexOf('src/pages') + 'src/pages'.length
+   * },
+   * {
+   *   src: 'src/features',
+   *   // match all files (note the \ is not needed in real code)
+   *   filePatterns: '*‍/pages/**\/',
+   *   path: (file) => {
+   *     const prefix = 'src/features'
+   *     // remove the everything before src/features and removes /pages
+   *     // /src/features/feature1/pages/index.vue -> feature1/index.vue
+   *     return file.slice(file.lastIndexOf(prefix) + prefix.length + 1).replace('/pages', '')
+   *   },
+   * },
+   * {
+   *   src: 'src/docs',
+   *   // adds a prefix with a param
+   *   path: 'docs/[lang]/',
+   * },
+   * ```
    */
-  path?: string
+  path?: string | ((filepath: string) => string)
 
   /**
-   * Allows to override the global `filePattern` option for this folder.
+   * Allows to override the global `filePattern` option for this folder. It can also extend the global values by passing
+   * a function that returns an array.
    */
-  filePatterns?: string | string[]
+  filePatterns?: _OverridableOption<string[], string | string[]>
 
   /**
-   * Allows to override the global `exclude` option for this folder.
+   * Allows to override the global `exclude` option for this folder. It can also extend the global values by passing a
+   * function that returns an array.
    */
-  exclude?: string[]
+  exclude?: _OverridableOption<string[], string | string[]>
 
   /**
-   * Allows to override the global `extensions` option for this folder.
+   * Allows to override the global `extensions` option for this folder. It can also extend the global values by passing
+   * a function that returns an array.
    */
-  extensions?: string[]
+  extensions?: _OverridableOption<string[]>
+}
+
+/**
+ * Normalized options for a routes folder.
+ */
+export interface RoutesFolderOptionResolved extends RoutesFolderOption {
+  path: string | ((filepath: string) => string)
+  /**
+   * Final glob pattern to match files in the folder.
+   */
+  pattern: string[]
+  filePatterns: string[]
+  exclude: string[]
+  extensions: string[]
+}
+
+export type _OverridableOption<T, AllowedTypes = T> =
+  | AllowedTypes
+  | ((existing: T) => T)
+
+/**
+ * Resolves an overridable option by calling the function with the existing value if it's a function, otherwise
+ * returning the passed `value`. If `value` is undefined, it returns the `defaultValue` instead.
+ *
+ * @param defaultValue default value for the option
+ * @param value and overridable option
+ */
+export function resolveOverridableOption<T>(
+  defaultValue: T,
+  value?: _OverridableOption<T, T>
+): T {
+  return typeof value === 'function'
+    ? (value as (existing: T) => T)(defaultValue)
+    : (value ?? defaultValue)
 }
 
 export type _RoutesFolder = string | RoutesFolderOption
 export type RoutesFolder = _RoutesFolder[] | _RoutesFolder
 
-export interface ResolvedOptions {
+/**
+ * unplugin-vue-router plugin options.
+ */
+export interface Options {
   /**
-   * Extensions of files to be considered as pages. Defaults to `['.vue']`. Cannot be empty.
+   * Extensions of files to be considered as pages. Cannot be empty. This allows to strip a
+   * bigger part of the filename e.g. `index.page.vue` -> `index` if an extension of `.page.vue` is provided.
+   * @default `['.vue']`
    */
-  extensions: string[]
+  extensions?: string[]
 
   /**
-   * Folder containing the components that should be used for routes. Can also be an array if you want to add multiple
+   * Folder(s) to scan for files and generate routes. Can also be an array if you want to add multiple
    * folders, or an object if you want to define a route prefix. Supports glob patterns but must be a folder, use
    * `extensions` and `exclude` to filter files.
    *
-   * @default "src/pages"
+   * @default `"src/pages"`
    */
-  routesFolder: RoutesFolderOption[]
+  routesFolder?: RoutesFolder
 
   /**
-   * Array of `picomatch` globs to ignore. Defaults to `[]`. Note the globs are relative to the `routesFolder`, so avoid
-   * writing something like `['src/pages']` as **it won't match anything**.
+   * Array of `picomatch` globs to ignore. Note the globs are relative to the cwd, so avoid writing
+   * something like `['ignored']` to match folders named that way, instead provide a path similar to the `routesFolder`:
+   * `['src/pages/ignored/**']` or use `['**​/ignored']` to match every folder named `ignored`.
+   * @default `[]`
    */
-  exclude: string[]
+  exclude?: string[] | string
 
   // NOTE: the comment below contains ZWJ characters to allow the sequence `**/*` to be displayed correctly
   /**
    * Pattern to match files in the `routesFolder`. Defaults to `**‍/*` plus a combination of all the possible extensions,
    * e.g. `**‍/*.{vue,md}` if `extensions` is set to `['.vue', '.md']`.
-   * @default "**‍/*"
+   * @default `['**‍/*']`
    */
-  filePatterns: string | string[]
+  filePatterns?: string[] | string
 
   /**
-   * Method to generate the name of a route.
+   * Method to generate the name of a route. It's recommended to keep the default value to guarantee a consistent,
+   * unique, and predictable naming.
    */
-  getRouteName: (node: TreeNode) => string
+  getRouteName?: (node: TreeNode) => string
 
   /**
    * Allows to extend a route by modifying its node, adding children, or even deleting it. This will be invoked once for
    * each route.
    *
-   * @experimental See https://github.com/posva/unplugin-vue-router/issues/43
-   *
    * @param route - {@link EditableTreeNode} of the route to extend
    */
-  extendRoute?: (route: EditableTreeNode) => Awaitable<void>
+  extendRoute?: (route: EditableTreeNode) => _Awaitable<void>
 
   /**
    * Allows to do some changes before writing the files. This will be invoked **every time** the files need to be written.
    *
-   * @experimental See https://github.com/posva/unplugin-vue-router/issues/43
-   *
    * @param rootRoute - {@link EditableTreeNode} of the root route
    */
-  beforeWriteFiles?: (rootRoute: EditableTreeNode) => Awaitable<void>
-
-  /**
-   * Enables EXPERIMENTAL data fetching. See https://github.com/posva/unplugin-vue-router/tree/main/src/data-fetching
-   * @experimental
-   */
-  dataFetching: boolean
+  beforeWriteFiles?: (rootRoute: EditableTreeNode) => _Awaitable<void>
 
   /**
    * Defines how page components should be imported. Defaults to dynamic imports to enable lazy loading of pages.
+   * @default `'async'`
    */
-  importMode: _OptionsImportMode
+  importMode?: 'sync' | 'async' | ((filepath: string) => 'sync' | 'async')
 
   /**
-   * Root of the project. All paths are resolved relatively to this one. Defaults to `process.cwd()`.
+   * Root of the project. All paths are resolved relatively to this one.
+   * @default `process.cwd()`
    */
-  root: string
+  root?: string
 
   /**
-   * Language for `<route>` blocks in SFC files. Defaults to `'json5'`.
+   * Language for `<route>` blocks in SFC files.
+   * @default `'json5'`
    */
-  routeBlockLang: 'yaml' | 'yml' | 'json5' | 'json'
+  routeBlockLang?: 'yaml' | 'yml' | 'json5' | 'json'
 
   /**
-   * Should generate d.ts files. Defaults to `true` if `typescript` is installed.
+   * Should we generate d.ts files or ont. Defaults to `true` if `typescript` is installed. Can be set to a string of
+   * the filepath to write the d.ts files to. By default it will generate a file named `typed-router.d.ts`.
+   * @default `true`
    */
-  dts: boolean | string
+  dts?: boolean | string
 
   /**
    * Allows inspection by vite-plugin-inspect by not adding the leading `\0` to the id of virtual modules.
    * @internal
    */
-  _inspect: boolean
+  _inspect?: boolean
 
   /**
    * Activates debug logs.
    */
-  logs: boolean
+  logs?: boolean
+
+  /**
+   * @inheritDoc ParseSegmentOptions
+   */
+  pathParser?: ParseSegmentOptions
+
+  /**
+   * Whether to watch the files for changes.
+   *
+   * Defaults to `true` unless the `CI` environment variable is set.
+   *
+   * @default `!process.env.CI`
+   */
+  watch?: boolean
+
+  /**
+   * Experimental options. **Warning**: these can change or be removed at any time, even it patch releases. Keep an eye
+   * on the Changelog.
+   */
+  experimental?: {
+    /**
+     * (Vite only). File paths or globs where loaders are exported. This will be used to filter out imported loaders and
+     * automatically re export them in page components. You can for example set this to `'src/loaders/**\/*'` (without
+     * the backslash) to automatically re export any imported variable from files in the `src/loaders` folder within a
+     * page component.
+     */
+    autoExportsDataLoaders?: string | string[]
+  }
 }
 
-/**
- * @internal
- */
-export type _OptionsImportMode =
-  | 'sync'
-  | 'async'
-  | ((filepath: string) => 'sync' | 'async')
-
-export interface Options
-  extends Partial<Omit<ResolvedOptions, 'routesFolder'>> {
-  routesFolder?: RoutesFolder
-}
-
-export const DEFAULT_OPTIONS: ResolvedOptions = {
+export const DEFAULT_OPTIONS = {
   extensions: ['.vue'],
   exclude: [],
-  routesFolder: [{ src: 'src/pages' }],
-  filePatterns: '**/*',
+  routesFolder: 'src/pages',
+  filePatterns: ['**/*'],
   routeBlockLang: 'json5',
   getRouteName: getFileBasedRouteName,
-  dataFetching: false,
   importMode: 'async',
   root: process.cwd(),
-  dts: isPackageExists('typescript'),
+  dts: isPackageInstalled('typescript'),
   logs: false,
   _inspect: false,
-}
+  pathParser: {
+    dotNesting: true,
+  },
+  watch: !process.env.CI,
+  experimental: {},
+} satisfies Options
 
 export interface ServerContext {
   invalidate: (module: string) => void
+  updateRoutes: () => void
   reload: () => void
 }
 
-function normalizeRoutesFolderOption(
-  routesFolder: RoutesFolder
-): RoutesFolderOption[] {
+function normalizeRoutesFolderOption(routesFolder: RoutesFolder) {
   return (isArray(routesFolder) ? routesFolder : [routesFolder]).map(
     (routeOption) =>
-      typeof routeOption === 'string' ? { src: routeOption } : routeOption
+      // normalizing here allows to have a better type for the resolved options
+      normalizeRouteOption(
+        typeof routeOption === 'string' ? { src: routeOption } : routeOption
+      )
   )
+}
+
+function normalizeRouteOption(routeOption: RoutesFolderOption) {
+  return {
+    ...routeOption,
+    // ensure filePatterns is always an array or a function
+    filePatterns: routeOption.filePatterns
+      ? typeof routeOption.filePatterns === 'function'
+        ? routeOption.filePatterns
+        : isArray(routeOption.filePatterns)
+          ? routeOption.filePatterns
+          : [routeOption.filePatterns]
+      : undefined,
+
+    // same for exclude
+    exclude: routeOption.exclude
+      ? typeof routeOption.exclude === 'function'
+        ? routeOption.exclude
+        : isArray(routeOption.exclude)
+          ? routeOption.exclude
+          : [routeOption.exclude]
+      : undefined,
+  }
 }
 
 /**
@@ -174,7 +289,7 @@ function normalizeRoutesFolderOption(
  * @param options - user provided options
  * @returns normalized options
  */
-export function resolveOptions(options: Options): ResolvedOptions {
+export function resolveOptions(options: Options) {
   const root = options.root || DEFAULT_OPTIONS.root
 
   // normalize the paths with the root
@@ -184,6 +299,16 @@ export function resolveOptions(options: Options): ResolvedOptions {
     ...routeOption,
     src: resolve(root, routeOption.src),
   }))
+
+  const experimental = { ...options.experimental }
+
+  if (experimental.autoExportsDataLoaders) {
+    experimental.autoExportsDataLoaders = (
+      Array.isArray(experimental.autoExportsDataLoaders)
+        ? experimental.autoExportsDataLoaders
+        : [experimental.autoExportsDataLoaders]
+    ).map((path) => resolve(root, path))
+  }
 
   if (options.extensions) {
     options.extensions = options.extensions
@@ -202,9 +327,48 @@ export function resolveOptions(options: Options): ResolvedOptions {
       .sort((a, b) => b.length - a.length)
   }
 
+  const filePatterns = options.filePatterns
+    ? isArray(options.filePatterns)
+      ? options.filePatterns
+      : [options.filePatterns]
+    : DEFAULT_OPTIONS.filePatterns
+  const exclude = options.exclude
+    ? isArray(options.exclude)
+      ? options.exclude
+      : [options.exclude]
+    : DEFAULT_OPTIONS.exclude
+
   return {
     ...DEFAULT_OPTIONS,
     ...options,
+    experimental,
     routesFolder,
+    filePatterns,
+    exclude,
   }
+}
+
+export type ResolvedOptions = ReturnType<typeof resolveOptions>
+
+/**
+ * Merge all the possible extensions as an array of unique values
+ * @param options - user provided options
+ * @internal
+ */
+export function mergeAllExtensions(options: ResolvedOptions): string[] {
+  const allExtensions = new Set(options.extensions)
+
+  for (const routeOption of options.routesFolder) {
+    if (routeOption.extensions) {
+      const extensions = resolveOverridableOption(
+        options.extensions,
+        routeOption.extensions
+      )
+      for (const ext of extensions) {
+        allExtensions.add(ext)
+      }
+    }
+  }
+
+  return Array.from(allExtensions.values())
 }

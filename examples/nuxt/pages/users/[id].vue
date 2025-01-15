@@ -1,16 +1,18 @@
 <script lang="ts">
+import { defineBasicLoader } from 'unplugin-vue-router/data-loaders/basic'
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-export const useUserData = defineLoader(
+export const useUserData = defineBasicLoader(
+  'users-id',
   async (route) => {
-    await delay(300)
+    console.log('fetching user...')
+    await delay(1000)
     const user = {
       id: route.params.id,
       when: Date.now(),
       n: Math.round(Math.random() * 10000),
       name: 'John Doe',
     }
-    console.log('fetching user:')
     console.table(user)
     return user
   },
@@ -19,18 +21,17 @@ export const useUserData = defineLoader(
 </script>
 
 <script setup lang="ts">
-import { HasDataLoaderMeta } from 'vue-router/auto'
-
-definePageMeta({
-  [HasDataLoaderMeta]: [() => import('/pages/users/[id].vue')],
+defineOptions({
+  __loaders: [useUserData],
 })
 
 const { data: user } = useUserData()
+const route = useRoute('users-id')
 </script>
 
 <template>
   <div>
-    <h1>User {{ $route.params.id }}</h1>
+    <h1>User {{ route.params.id }}</h1>
     <pre>{{ user }}</pre>
   </div>
 </template>

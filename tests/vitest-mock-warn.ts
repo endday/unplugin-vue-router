@@ -1,6 +1,6 @@
 // https://github.com/posva/jest-mock-warn/blob/master/src/index.js
 
-import { afterEach, beforeEach, expect, SpyInstance, vi } from 'vitest'
+import { afterEach, beforeEach, expect, type MockInstance, vi } from 'vitest'
 
 export function mockWarn() {
   expect.extend({
@@ -28,7 +28,13 @@ export function mockWarn() {
 
     toHaveBeenWarnedLast(received: string | RegExp) {
       asserted.set(received.toString(), received)
-      const lastCall = warn.mock.calls[warn.mock.calls.length - 1][0]
+      if (warn.mock.calls.length === 0) {
+        return {
+          pass: false,
+          message: () => 'expected console.warn to have been called.',
+        }
+      }
+      const lastCall = warn.mock.calls.at(-1)?.[0]
       const passed =
         typeof received === 'string'
           ? lastCall.indexOf(received) > -1
@@ -77,7 +83,7 @@ export function mockWarn() {
     },
   })
 
-  let warn: SpyInstance
+  let warn: MockInstance
   const asserted = new Map<string, string | RegExp>()
 
   beforeEach(() => {
@@ -91,7 +97,7 @@ export function mockWarn() {
     const nonAssertedWarnings = warn.mock.calls
       .map((args) => args[0])
       .filter((received) => {
-        return !assertedArray.some(([key, assertedMsg]) => {
+        return !assertedArray.some(([_key, assertedMsg]) => {
           return typeof assertedMsg === 'string'
             ? received.indexOf(assertedMsg) > -1
             : assertedMsg.test(received)
@@ -107,12 +113,13 @@ export function mockWarn() {
   })
 }
 
-declare global {
-  namespace Vi {
-    interface JestAssertion<T = any> {
-      toHaveBeenWarned(): void
-      toHaveBeenWarnedLast(): void
-      toHaveBeenWarnedTimes(n: number): void
-    }
-  }
+interface CustomMatchers<R = unknown> {
+  toHaveBeenWarned(): R
+  toHaveBeenWarnedLast(): R
+  toHaveBeenWarnedTimes(n: number): R
+}
+
+declare module 'vitest' {
+  interface Assertion<T = any> extends CustomMatchers<T> {}
+  interface AsymmetricMatchersContaining extends CustomMatchers {}
 }

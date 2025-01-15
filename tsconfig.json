@@ -1,14 +1,66 @@
 {
-  "include": ["*.d.ts", "src/**/*.ts", "src/*.d.ts"],
+  "include": [
+    "./src/**/*.ts",
+    "./src/*.d.ts",
+    "./client.d.ts",
+    "./tests/**/*.ts,"
+  ],
+  "exclude": [
+    "./src/**/*.test-d.ts",
+    // "./src/**/*.spec.ts",
+    // "./src/data-loaders/defineQueryLoader.ts",
+    // "./src/data-loaders/defineVueFireLoader.ts",
+    "node_modules",
+    "dist"
+  ],
   "compilerOptions": {
-    "target": "es2017",
-    "module": "esnext",
-    "lib": ["esnext", "DOM"],
-    "moduleResolution": "node",
+    "baseUrl": ".",
+    "rootDir": ".",
+    "jsx": "preserve",
+    "target": "ESNext",
+    "module": "ESNext",
+    "lib": [
+      "ESNext",
+      "DOM"
+    ],
+    "moduleResolution": "Bundler",
+    "skipDefaultLibCheck": true,
+    "skipLibCheck": true,
     "esModuleInterop": true,
+    "isolatedModules": true,
     "strict": true,
+    "allowUnusedLabels": false,
+    "allowUnreachableCode": false,
+    "exactOptionalPropertyTypes": false,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noPropertyAccessFromIndexSignature": false,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
     "strictNullChecks": true,
     "resolveJsonModule": true,
-    "types": ["vite/client"]
-  }
+    "paths": {
+      "unplugin-vue-router": [
+        "./src/index.ts"
+      ],
+      "unplugin-vue-router/types": [
+        "./src/types.ts"
+      ],
+      "unplugin-vue-router/runtime": [
+        "./src/runtime.ts"
+      ],
+      "unplugin-vue-router/data-loaders": [
+        "./src/data-loaders/entries/index.ts"
+      ]
+    },
+    "types": [
+      "node",
+      "vite/client"
+    ]
+  },
+  "vueCompilerOptions": {
+    "plugins": []
+  },
 }

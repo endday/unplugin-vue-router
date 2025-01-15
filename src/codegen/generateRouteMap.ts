@@ -1,14 +1,7 @@
-import type {
-  RouteMeta,
-  RouteParamsRaw,
-  RouteParams,
-  RouterLinkProps as _RouterLinkProps,
-} from 'vue-router'
 import type { TreeNode } from '../core/tree'
 import { generateRouteParams } from './generateRouteParams'
 
 export function generateRouteNamedMap(node: TreeNode): string {
-  // root
   if (node.isRoot()) {
     return `export interface RouteNamedMap {
 ${node.getSortedChildren().map(generateRouteNamedMap).join('')}}`
@@ -31,20 +24,3 @@ export function generateRouteRecordInfo(node: TreeNode) {
     node.fullPath
   }', ${generateRouteParams(node, true)}, ${generateRouteParams(node, false)}>`
 }
-
-export interface RouteRecordInfo<
-  Name extends string = string,
-  Path extends string = string,
-  ParamsRaw extends RouteParamsRaw = RouteParamsRaw,
-  Params extends RouteParams = RouteParams,
-  Meta extends RouteMeta = RouteMeta
-> {
-  name: Name
-  path: Path
-  paramsRaw: ParamsRaw
-  params: Params
-  // TODO: implement meta with a defineRoute macro
-  meta: Meta
-}
-
-export type _RouteMapGeneric = Record<string, RouteRecordInfo>

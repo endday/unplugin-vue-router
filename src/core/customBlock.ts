@@ -1,15 +1,16 @@
 import { SFCBlock, parse } from '@vue/compiler-sfc'
-import { promises as fs } from 'fs'
 import { ResolvedOptions } from '../options'
 import JSON5 from 'json5'
 import { parse as YAMLParser } from 'yaml'
 import { RouteRecordRaw } from 'vue-router'
 import { warn } from './utils'
 
-export async function getRouteBlock(path: string, options: ResolvedOptions) {
-  const content = await fs.readFile(path, 'utf8')
-
-  const parsedSFC = await parse(content, { pad: 'space' }).descriptor
+export function getRouteBlock(
+  path: string,
+  content: string,
+  options: ResolvedOptions
+) {
+  const parsedSFC = parse(content, { pad: 'space' }).descriptor
   const blockStr = parsedSFC?.customBlocks.find((b) => b.type === 'route')
 
   if (!blockStr) return
@@ -33,14 +34,14 @@ export interface CustomRouteBlock
       'components' | 'component' | 'children' | 'beforeEnter' | 'name'
     >
   > {
-  name?: string
+  name?: string | undefined
 }
 
 function parseCustomBlock(
   block: SFCBlock,
   filePath: string,
   options: ResolvedOptions
-): CustomRouteBlock | undefined {
+): CustomRouteBlock | void {
   const lang = block.lang ?? options.routeBlockLang
 
   if (lang === 'json5') {

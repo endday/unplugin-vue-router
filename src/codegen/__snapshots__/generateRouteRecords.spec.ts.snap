@@ -37,7 +37,7 @@ exports[`generateRouteRecord > adds children and name when folder and component 
 ]"
 `;
 
-exports[`generateRouteRecord > correctly names index.vue files 1`] = `
+exports[`generateRouteRecord > correctly names index files 1`] = `
 "[
   {
     path: '/',
@@ -99,9 +99,8 @@ exports[`generateRouteRecord > generate custom imports 1`] = `
 `;
 
 exports[`generateRouteRecord > generate custom imports 2`] = `
-Map {
-  "_page_0" => "a.vue",
-}
+"import _page_0 from 'a.vue'
+"
 `;
 
 exports[`generateRouteRecord > generate static imports 1`] = `
@@ -142,11 +141,10 @@ exports[`generateRouteRecord > generate static imports 1`] = `
 `;
 
 exports[`generateRouteRecord > generate static imports 2`] = `
-Map {
-  "_page_0" => "a.vue",
-  "_page_1" => "b.vue",
-  "_page_2" => "nested/file/c.vue",
-}
+"import _page_0 from 'a.vue'
+import _page_1 from 'b.vue'
+import _page_2 from 'nested/file/c.vue'
+"
 `;
 
 exports[`generateRouteRecord > handles multiple named views 1`] = `
@@ -482,6 +480,116 @@ exports[`generateRouteRecord > nested children 2`] = `
 ]"
 `;
 
+exports[`generateRouteRecord > raw paths insertions > dedupes sync imports for the same component 1`] = `
+"[
+  {
+    path: '/a/b',
+    name: '/a/b',
+    component: _page_0,
+    /* no children */
+  },
+  {
+    path: '/a/c',
+    name: '/a/c',
+    component: _page_0,
+    /* no children */
+  }
+]"
+`;
+
+exports[`generateRouteRecord > raw paths insertions > do not nest raw segments with file based 1`] = `
+"[
+  {
+    path: '/a',
+    /* internal name: '/a' */
+    /* no component */
+    children: [
+      {
+        path: 'b',
+        name: '/a/b',
+        component: () => import('a/b.vue'),
+        /* no children */
+      }
+    ],
+  },
+  {
+    path: '/a/b/c',
+    name: '/a/b/c',
+    component: () => import('a.vue'),
+    /* no children */
+  }
+]"
+`;
+
+exports[`generateRouteRecord > raw paths insertions > works with mixed nodes 1`] = `
+"[
+  {
+    path: '/a',
+    name: '/a',
+    component: () => import('a.vue'),
+    /* no children */
+  },
+  {
+    path: '/b',
+    name: '/b',
+    component: () => import('b.vue'),
+    /* no children */
+  },
+  {
+    path: '/c',
+    name: '/c',
+    component: () => import('c.vue'),
+    /* no children */
+  }
+]"
+`;
+
+exports[`generateRouteRecord > raw paths insertions > works with nested nodes 1`] = `
+"[
+  {
+    path: '/a/b/c',
+    name: '/a/b/c',
+    component: () => import('a.vue'),
+    /* no children */
+  },
+  {
+    path: '/a/b/d',
+    name: '/a/b/d',
+    component: () => import('a.vue'),
+    /* no children */
+  },
+  {
+    path: '/a/d/c',
+    name: '/a/d/c',
+    component: () => import('a.vue'),
+    /* no children */
+  }
+]"
+`;
+
+exports[`generateRouteRecord > raw paths insertions > works with raw paths 1`] = `
+"[
+  {
+    path: '/a',
+    name: '/a',
+    component: () => import('a.vue'),
+    /* no children */
+  },
+  {
+    path: '/b',
+    name: '/b',
+    component: () => import('b.vue'),
+    /* no children */
+  },
+  {
+    path: '/c',
+    name: '/c',
+    component: () => import('c.vue'),
+    /* no children */
+  }
+]"
+`;
+
 exports[`generateRouteRecord > removes trailing slashes 1`] = `
 "[
   {
@@ -533,8 +641,8 @@ exports[`generateRouteRecord > route block > adds meta data 1`] = `
     component: () => import('index.vue'),
     /* no children */
     meta: {
-      \\"auth\\": true,
-      \\"title\\": \\"Home\\"
+      "auth": true,
+      "title": "Home"
     }
   }
 ]"
@@ -551,8 +659,8 @@ exports[`generateRouteRecord > route block > handles named views with empty rout
     },
     /* no children */
     meta: {
-      \\"auth\\": true,
-      \\"title\\": \\"Home\\"
+      "auth": true,
+      "title": "Home"
     }
   }
 ]"
@@ -566,12 +674,12 @@ exports[`generateRouteRecord > route block > merges deep meta properties 1`] = `
     component: () => import('index.vue'),
     /* no children */
     meta: {
-      \\"a\\": {
-        \\"one\\": 1,
-        \\"two\\": 1
+      "a": {
+        "one": 1,
+        "two": 1
       },
-      \\"b\\": {
-        \\"a\\": [
+      "b": {
+        "a": [
           2,
           3
         ]
@@ -589,8 +697,8 @@ exports[`generateRouteRecord > route block > merges multiple meta properties 1`]
     component: () => import('index.vue'),
     /* no children */
     meta: {
-      \\"one\\": true,
-      \\"two\\": true
+      "one": true,
+      "two": true
     }
   }
 ]"

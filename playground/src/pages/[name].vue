@@ -1,45 +1,60 @@
 <script lang="ts">
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
-export const useUserData = defineLoader('/[name]', async (route) => {
-  await delay(1000)
-  if (route.name === '/[name]') {
-    route.params
-  }
-  const user = {
-    name: route.params.name || 'Edu',
-    // @ts-expect-error: no id param!
-    id: route.params.id || 24,
-    when: new Date().toUTCString(),
-  }
-  return user
-})
+export const useUserData = defineBasicLoader(
+  '/[name]',
+  async (route) => {
+    await delay(1000)
+    if (route.name === '/[name]') {
+      route.params
+    }
+    const user = {
+      name: route.params.name || 'Edu',
+      // @ts-expect-error: no id param!
+      id: route.params.id || 24,
+      when: new Date().toUTCString(),
+    }
+    return user
+  },
+  { key: 'user' }
+)
 
 const other = 'hello'
 
-const useOne = defineLoader(async (route) => {
-  if (route.name === '/[name]') {
-    route.params.name
-  }
+const useOne = defineBasicLoader(
+  async (route) => {
+    const user = await useUserData()
+    if (route.name === '/[name]') {
+      route.params.name
+    }
 
-  return { one: 'one' }
-})
-const useTwo = defineLoader(async () => ({ two: 'two' }), { lazy: true })
+    return {
+      one: 'one',
+      user: user.name,
+    }
+  },
+  { key: 'one' }
+)
+const useTwo = defineBasicLoader(async () => ({ two: 'two' }), { lazy: true })
 
-export { useOne, other }
+export { useOne, other, useTwo }
 export default {}
 </script>
 
 <script lang="ts" setup>
-import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router/auto'
-import type { RouterTyped, RouteRecordRaw } from 'vue-router/auto'
-import type { RouteLocationNormalized } from 'vue-router/auto'
+import { dummy, dummy_id, dummy_number } from '@/utils'
+import * as dummy_star from '@/utils'
+import {
+  onBeforeRouteLeave,
+  onBeforeRouteUpdate,
+  type RouteLocationNormalized,
+} from 'vue-router'
 
 const thing = 'THING'
 
 // const $route = useRoute()
 
-const { data: user, pending, refresh } = useUserData()
+const { data: user, isLoading, reload } = useUserData()
 
 const { data: one } = useOne()
 const { data: two } = useTwo()
@@ -89,9 +104,21 @@ definePage({
   // name: 'my-name',
   alias: ['/n/:name'],
   meta: {
-    // hello: 'there',
+    [dummy_id]: 'id',
+    fixed: dummy_number,
     mySymbol: Symbol(),
-    // test: (to: RouteLocationNormalized) => console.log(to.name === '/[name]' ? to.params.name : 'nope'),
+    ['hello' + 'expr']: true,
+    test: (to: RouteLocationNormalized) => {
+      // this one should crash it
+      // anyRoute.params
+      const shadow = 'nope'
+      // dummy(shadow)
+      dummy_star
+      if (Math.random()) {
+        console.log(typeof dummy)
+      }
+      console.log(to.name === '/[name]' ? to.params.name : shadow)
+    },
   },
 })
 
@@ -109,15 +136,23 @@ definePage({
     <h1>Param: {{ $route.name === '/[name]' && $route.params.name }}</h1>
     <h2>Param: {{ route.params.name }}</h2>
     <p v-show="false">{{ thing }}</p>
-    <p v-if="pending">Loading user...</p>
+    <p v-if="isLoading">Loading user...</p>
     <pre v-else>{{ user }}</pre>
+
+    <p>one:</p>
+    <pre>{{ one }}</pre>
+    <p>two</p>
+    <pre>{{ two }}</pre>
+    <p>meta:</p>
+    <pre>{{ route.meta }}</pre>
   </main>
 </template>
 
 <route lang="json">
 {
   "meta": {
-    "hello": "there"
+    "hello": "there",
+    "n": 1
   }
 }
 </route>

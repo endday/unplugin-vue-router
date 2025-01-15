@@ -1,17 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_OPTIONS } from '../options'
-import { createPrefixTree } from './tree'
+import { DEFAULT_OPTIONS, resolveOptions } from '../options'
+import { PrefixTree } from './tree'
 import { TreeNodeType } from './treeNodeValue'
+import { resolve } from 'pathe'
+import { mockWarn } from '../../tests/vitest-mock-warn'
 
 describe('Tree', () => {
+  const RESOLVED_OPTIONS = resolveOptions(DEFAULT_OPTIONS)
+  mockWarn()
+
   it('creates an empty tree', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
     expect(tree.children.size).toBe(0)
   })
 
   it('creates a tree with a single static path', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('foo.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('foo', 'foo.vue')
     expect(tree.children.size).toBe(1)
     const child = tree.children.get('foo')!
     expect(child).toBeDefined()
@@ -24,8 +29,8 @@ describe('Tree', () => {
   })
 
   it('creates a tree with a single param', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('[id].vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('[id]', '[id].vue')
     expect(tree.children.size).toBe(1)
     const child = tree.children.get('[id]')!
     expect(child).toBeDefined()
@@ -38,9 +43,28 @@ describe('Tree', () => {
     expect(child.children.size).toBe(0)
   })
 
+  it('separate param names from static segments', () => {
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('[id]_a', '[id]_a.vue')
+    tree.insert('[a]e[b]f', '[a]e[b]f.vue')
+    expect(tree.children.get('[id]_a')!.value).toMatchObject({
+      rawSegment: '[id]_a',
+      params: [{ paramName: 'id' }],
+      path: '/:id()_a',
+      _type: TreeNodeType.param,
+    })
+
+    expect(tree.children.get('[a]e[b]f')!.value).toMatchObject({
+      rawSegment: '[a]e[b]f',
+      params: [{ paramName: 'a' }, { paramName: 'b' }],
+      path: '/:a()e:b()f',
+      _type: TreeNodeType.param,
+    })
+  })
+
   it('creates params in nested files', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    const nestedId = tree.insert('nested/[id].vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    const nestedId = tree.insert('nested/[id]', 'nested/[id].vue')
 
     expect(nestedId.value.isParam()).toBe(true)
     expect(nestedId.params).toEqual([
@@ -53,7 +77,7 @@ describe('Tree', () => {
       }),
     ])
 
-    const nestedAId = tree.insert('nested/a/[id].vue')
+    const nestedAId = tree.insert('nested/a/[id]', 'nested/a/[id].vue')
     expect(nestedAId.value.isParam()).toBe(true)
     expect(nestedAId.params).toEqual([
       expect.objectContaining({
@@ -67,9 +91,9 @@ describe('Tree', () => {
   })
 
   it('creates params in nested folders', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
 
-    let node = tree.insert('nested/[id]/index.vue')
+    let node = tree.insert('nested/[id]/index', 'nested/[id]/index.vue')
     const id = tree.children.get('nested')!.children.get('[id]')!
     expect(id.value.isParam()).toBe(true)
     expect(id.params).toEqual([
@@ -93,7 +117,7 @@ describe('Tree', () => {
       }),
     ])
 
-    node = tree.insert('nested/[a]/other.vue')
+    node = tree.insert('nested/[a]/other', 'nested/[a]/other.vue')
     expect(node.value.isParam()).toBe(false)
     expect(node.params).toEqual([
       expect.objectContaining({
@@ -105,7 +129,7 @@ describe('Tree', () => {
       }),
     ])
 
-    node = tree.insert('nested/a/[id]/index.vue')
+    node = tree.insert('nested/a/[id]/index', 'nested/a/[id]/index.vue')
     expect(node.value.isParam()).toBe(false)
     expect(node.params).toEqual([
       expect.objectContaining({
@@ -118,19 +142,73 @@ describe('Tree', () => {
     ])
   })
 
+  it('handles repeatable params one or more', () => {
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('[id]+', '[id]+.vue')
+    expect(tree.children.get('[id]+')!.value).toMatchObject({
+      rawSegment: '[id]+',
+      params: [
+        {
+          paramName: 'id',
+          repeatable: true,
+          optional: false,
+          modifier: '+',
+        },
+      ],
+      path: '/:id+',
+      _type: TreeNodeType.param,
+    })
+  })
+
+  it('handles repeatable params zero or more', () => {
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('[[id]]+', '[[id]]+.vue')
+    expect(tree.children.get('[[id]]+')!.value).toMatchObject({
+      rawSegment: '[[id]]+',
+      params: [
+        {
+          paramName: 'id',
+          repeatable: true,
+          optional: true,
+          modifier: '*',
+        },
+      ],
+      path: '/:id*',
+      _type: TreeNodeType.param,
+    })
+  })
+
+  it('handles optional params', () => {
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('[[id]]', '[[id]].vue')
+    expect(tree.children.get('[[id]]')!.value).toMatchObject({
+      rawSegment: '[[id]]',
+      params: [
+        {
+          paramName: 'id',
+          repeatable: false,
+          optional: true,
+          modifier: '?',
+        },
+      ],
+      path: '/:id?',
+      _type: TreeNodeType.param,
+    })
+  })
+
   it('handles named views', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('index.vue')
-    tree.insert('index@a.vue')
-    tree.insert('index@b.vue')
-    tree.insert('nested/foo@a.vue')
-    tree.insert('nested/foo@b.vue')
-    tree.insert('nested/[id]@a.vue')
-    tree.insert('nested/[id]@b.vue')
-    tree.insert('not.nested.path@a.vue')
-    tree.insert('not.nested.path@b.vue')
-    tree.insert('deep/not.nested.path@a.vue')
-    tree.insert('deep/not.nested.path@b.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('index', 'index.vue')
+    tree.insert('index@a', 'index@a.vue')
+    tree.insert('index@b', 'index@b.vue')
+    tree.insert('nested/foo@a', 'nested/foo@a.vue')
+    tree.insert('nested/foo@b', 'nested/foo@b.vue')
+    tree.insert('nested/[id]@a', 'nested/[id]@a.vue')
+    tree.insert('nested/[id]@b', 'nested/[id]@b.vue')
+    tree.insert('not.nested.path@a', 'not.nested.path@a.vue')
+    tree.insert('not.nested.path@b', 'not.nested.path@b.vue')
+    tree.insert('deep/not.nested.path@a', 'deep/not.nested.path@a.vue')
+    tree.insert('deep/not.nested.path@b', 'deep/not.nested.path@b.vue')
     expect([...tree.children.get('index')!.value.components.keys()]).toEqual([
       'default',
       'a',
@@ -160,29 +238,31 @@ describe('Tree', () => {
   })
 
   it('handles single named views that are not default', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('index@a.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('index@a', 'index@a.vue')
     expect([...tree.children.get('index')!.value.components.keys()]).toEqual([
       'a',
     ])
   })
 
   it('removes the node after all named views', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('index.vue')
-    tree.insert('index@a.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('index', 'index.vue')
+    tree.insert('index@a', 'index@a.vue')
     expect(tree.children.get('index')).toBeDefined()
-    tree.remove('index@a.vue')
+    tree.remove('index@a')
     expect(tree.children.get('index')).toBeDefined()
-    tree.remove('index.vue')
+    tree.remove('index')
     expect(tree.children.get('index')).toBeUndefined()
   })
 
   it('can remove itself from the tree', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('index.vue').insert('nested.vue')
-    tree.insert('a.vue').insert('nested.vue')
-    tree.insert('b.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree
+      .insert('index', 'index.vue')
+      .insert('nested', resolve('index/nested.vue'))
+    tree.insert('a', 'a.vue').insert('nested', resolve('a/nested.vue'))
+    tree.insert('b', 'b.vue')
     expect(tree.children.size).toBe(3)
     tree.children.get('a')!.delete()
     expect(tree.children.size).toBe(2)
@@ -191,11 +271,11 @@ describe('Tree', () => {
   })
 
   it('handles multiple params', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('[a]-[b].vue')
-    tree.insert('o[a]-[b]c.vue')
-    tree.insert('o[a][b]c.vue')
-    tree.insert('nested/o[a][b]c.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('[a]-[b]', '[a]-[b].vue')
+    tree.insert('o[a]-[b]c', 'o[a]-[b]c.vue')
+    tree.insert('o[a][b]c', 'o[a][b]c.vue')
+    tree.insert('nested/o[a][b]c', 'nested/o[a][b]c.vue')
     expect(tree.children.size).toBe(4)
     expect(tree.children.get('[a]-[b]')!.value).toMatchObject({
       pathSegment: ':a-:b',
@@ -203,10 +283,10 @@ describe('Tree', () => {
   })
 
   it('creates a tree of nested routes', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('index.vue')
-    tree.insert('a/index.vue')
-    tree.insert('a/b/index.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('index', 'index.vue')
+    tree.insert('a/index', 'a/index.vue')
+    tree.insert('a/b/index', 'a/b/index.vue')
     expect(Array.from(tree.children.keys())).toEqual(['index', 'a'])
     const index = tree.children.get('index')!
     expect(index.value).toMatchObject({
@@ -231,7 +311,7 @@ describe('Tree', () => {
       path: '/a',
     })
 
-    tree.insert('a.vue')
+    tree.insert('a', 'a.vue')
     expect(a.value.components.get('default')).toBe('a.vue')
     expect(a.value).toMatchObject({
       rawSegment: 'a',
@@ -240,8 +320,8 @@ describe('Tree', () => {
   })
 
   it('handles a modifier for single params', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('[id]+.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('[id]+', '[id]+.vue')
     expect(tree.children.size).toBe(1)
     const child = tree.children.get('[id]+')!
     expect(child).toBeDefined()
@@ -256,10 +336,10 @@ describe('Tree', () => {
   })
 
   it('removes nodes', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('foo.vue')
-    tree.insert('[id].vue')
-    tree.remove('foo.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('foo', 'foo.vue')
+    tree.insert('[id]', '[id].vue')
+    tree.remove('foo')
     expect(tree.children.size).toBe(1)
     const child = tree.children.get('[id]')!
     expect(child).toBeDefined()
@@ -273,49 +353,49 @@ describe('Tree', () => {
   })
 
   it('removes empty folders', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('a/b/c/d.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('a/b/c/d', 'a/b/c/d.vue')
     expect(tree.children.size).toBe(1)
-    tree.remove('a/b/c/d.vue')
+    tree.remove('a/b/c/d')
     expect(tree.children.size).toBe(0)
   })
 
   it('insert returns the node', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    const a = tree.insert('a.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    const a = tree.insert('a', 'a.vue')
     expect(tree.children.get('a')).toBe(a)
-    const bC = tree.insert('b/c.vue')
+    const bC = tree.insert('b/c', 'b/c.vue')
     expect(tree.children.get('b')!.children.get('c')).toBe(bC)
-    const bCD = tree.insert('b/c/d.vue')
+    const bCD = tree.insert('b/c/d', 'b/c/d.vue')
     expect(tree.children.get('b')!.children.get('c')!.children.get('d')).toBe(
       bCD
     )
   })
 
   it('keeps parent with file but no children', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('a/b/c/d.vue')
-    tree.insert('a/b.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('a/b/c/d', 'a/b/c/d.vue')
+    tree.insert('a/b', 'a/b.vue')
     expect(tree.children.size).toBe(1)
     const child = tree.children.get('a')!.children.get('b')!
     expect(child).toBeDefined()
     expect(child.children.size).toBe(1)
 
-    tree.remove('a/b/c/d.vue')
+    tree.remove('a/b/c/d')
     expect(tree.children.size).toBe(1)
     expect(tree.children.get('a')!.children.size).toBe(1)
     expect(child.children.size).toBe(0)
   })
 
   it('allows a custom name', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    let node = tree.insert('[a]-[b].vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    let node = tree.insert('[a]-[b]', '[a]-[b].vue')
     node.value.setOverride('', {
       name: 'custom',
     })
     expect(node.name).toBe('custom')
 
-    node = tree.insert('auth/login.vue')
+    node = tree.insert('auth/login', 'auth/login.vue')
     node.value.setOverride('', {
       name: 'custom-child',
     })
@@ -323,15 +403,15 @@ describe('Tree', () => {
   })
 
   it('allows a custom path', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    let node = tree.insert('[a]-[b].vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    let node = tree.insert('[a]-[b]', '[a]-[b].vue')
     node.value.setOverride('', {
       path: '/custom',
     })
     expect(node.path).toBe('/custom')
     expect(node.fullPath).toBe('/custom')
 
-    node = tree.insert('auth/login.vue')
+    node = tree.insert('auth/login', 'auth/login.vue')
     node.value.setOverride('', {
       path: '/custom-child',
     })
@@ -340,9 +420,9 @@ describe('Tree', () => {
   })
 
   it('removes trailing slash from path but not from name', () => {
-    const tree = createPrefixTree(DEFAULT_OPTIONS)
-    tree.insert('a/index.vue')
-    tree.insert('a/a.vue')
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('a/index', 'a/index.vue')
+    tree.insert('a/a', 'a/a.vue')
     let child = tree.children.get('a')!
     expect(child).toBeDefined()
     expect(child.fullPath).toBe('/a')
@@ -353,42 +433,119 @@ describe('Tree', () => {
     expect(child.fullPath).toBe('/a')
 
     // it stays the same with a parent component in the parent route record
-    tree.insert('a.vue')
+    tree.insert('a', 'a.vue')
     child = tree.children.get('a')!.children.get('index')!
     expect(child).toBeDefined()
     expect(child.name).toBe('/a/')
     expect(child.fullPath).toBe('/a')
   })
 
-  it('handles long extensions', () => {
-    const tree = createPrefixTree({
-      ...DEFAULT_OPTIONS,
-      extensions: ['.page.vue'],
-    })
-    tree.insert('a.page.vue')
-    tree.insert('nested/b/c.page.vue')
-    expect(tree.children.size).toBe(2)
+  it('strips groups from file paths', () => {
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('(home)', '(home).vue')
+    let child = tree.children.get('(home)')!
+    expect(child).toBeDefined()
+    expect(child.path).toBe('/')
+    expect(child.fullPath).toBe('/')
+  })
 
-    const a = tree.children.get('a')!
+  it('strips groups from nested file paths', () => {
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('nested/(home)', 'nested/(home).vue')
+    let child = tree.children.get('nested')!
+    expect(child).toBeDefined()
+
+    child = child.children.get('(home)')!
+    expect(child).toBeDefined()
+    expect(child.path).toBe('')
+    expect(child.fullPath).toBe('/nested')
+  })
+
+  it('strips groups in folders', () => {
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('(group)/a', '(group)/a.vue')
+    tree.insert('(group)/index', '(group)/index.vue')
+
+    const group = tree.children.get('(group)')!
+    expect(group).toBeDefined()
+    expect(group.path).toBe('/')
+
+    const a = group.children.get('a')!
     expect(a).toBeDefined()
-    expect(a.value.components.get('default')).toBe('a.page.vue')
     expect(a.fullPath).toBe('/a')
 
-    const nested = tree.children.get('nested')!
-    expect(nested).toBeDefined()
-    expect(nested.children.size).toBe(1)
-    const b = nested.children.get('b')!
-    expect(b).toBeDefined()
-    expect(b.children.size).toBe(1)
-    const c = b.children.get('c')!
-    expect(c).toBeDefined()
-    expect(c.value.components.get('default')).toBe('nested/b/c.page.vue')
-    expect(c.fullPath).toBe('/nested/b/c')
+    const index = group.children.get('index')!
+    expect(index).toBeDefined()
+    expect(index.fullPath).toBe('/')
+  })
 
-    tree.insert('a/nested.page.vue')
-    const aNested = a.children.get('nested')!
-    expect(aNested).toBeDefined()
-    expect(aNested.value.components.get('default')).toBe('a/nested.page.vue')
-    expect(aNested.fullPath).toBe('/a/nested')
+  it('strips groups in nested folders', () => {
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('nested/(nested-group)/a', 'nested/(nested-group)/a.vue')
+    tree.insert(
+      'nested/(nested-group)/index',
+      'nested/(nested-group)/index.vue'
+    )
+
+    const rootNode = tree.children.get('nested')!
+    expect(rootNode).toBeDefined()
+    expect(rootNode.path).toBe('/nested')
+
+    const nestedGroupNode = rootNode.children.get('(nested-group)')!
+    expect(nestedGroupNode).toBeDefined()
+    // nested groups have an empty path
+    expect(nestedGroupNode.path).toBe('')
+    expect(nestedGroupNode.fullPath).toBe('/nested')
+
+    const aNode = nestedGroupNode.children.get('a')!
+    expect(aNode).toBeDefined()
+    expect(aNode.fullPath).toBe('/nested/a')
+
+    const indexNode = nestedGroupNode.children.get('index')!
+    expect(indexNode).toBeDefined()
+    expect(indexNode.fullPath).toBe('/nested')
+  })
+
+  it('warns if the closing group is missing', () => {
+    const tree = new PrefixTree(RESOLVED_OPTIONS)
+    tree.insert('(home', '(home).vue')
+    expect(`"(home" is missing the closing ")"`).toHaveBeenWarned()
+  })
+
+  // TODO: check warns with different order
+  it.todo(`warns when a group's path conflicts with an existing file`)
+
+  describe('dot nesting', () => {
+    it('transforms dots into nested routes by default', () => {
+      const tree = new PrefixTree(RESOLVED_OPTIONS)
+      tree.insert('users.new', 'users.new.vue')
+      expect(tree.children.size).toBe(1)
+      const users = tree.children.get('users.new')!
+      expect(users.value).toMatchObject({
+        rawSegment: 'users.new',
+        pathSegment: 'users/new',
+        path: '/users/new',
+        _type: TreeNodeType.static,
+      })
+    })
+
+    it('can ignore dot nesting', () => {
+      const tree = new PrefixTree({
+        ...RESOLVED_OPTIONS,
+        pathParser: {
+          dotNesting: false,
+        },
+      })
+      tree.insert('1.2.3-lesson', '1.2.3-lesson.vue')
+      expect(tree.children.size).toBe(1)
+      const lesson = tree.children.get('1.2.3-lesson')!
+
+      expect(lesson.value).toMatchObject({
+        rawSegment: '1.2.3-lesson',
+        pathSegment: '1.2.3-lesson',
+        path: '/1.2.3-lesson',
+        _type: TreeNodeType.static,
+      })
+    })
   })
 })

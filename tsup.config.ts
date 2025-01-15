@@ -1,10 +1,32 @@
-import { defineConfig } from 'tsup'
+import { defineConfig, type Options } from 'tsup'
 
-export default defineConfig({
-  entry: ['src/*.ts'],
+export const commonOptions = {
   clean: true,
   format: ['cjs', 'esm'],
   dts: true,
-  external: ['@vue/compiler-sfc', 'vue', 'vue-router'],
-  onSuccess: 'npm run build:fix',
-})
+  external: [
+    '@vue/compiler-sfc',
+    'vue',
+    'vue-router',
+    'vue-demi',
+    '@pinia/colada',
+    'pinia',
+  ],
+  cjsInterop: true,
+  splitting: true,
+} satisfies Options
+
+export default defineConfig([
+  {
+    ...commonOptions,
+    entry: [
+      './src/index.ts',
+      './src/options.ts',
+      './src/esbuild.ts',
+      './src/rollup.ts',
+      './src/vite.ts',
+      './src/webpack.ts',
+      './src/types.ts',
+    ],
+  },
+])

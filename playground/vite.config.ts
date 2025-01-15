@@ -1,32 +1,61 @@
 import { fileURLToPath, URL } from 'url'
 import { defineConfig } from 'vite'
-import Inspect from 'vite-plugin-inspect'
-import Markdown from 'vite-plugin-vue-markdown'
+import { join } from 'node:path'
+import Markdown from 'unplugin-vue-markdown/vite'
 // @ts-ignore: the plugin should not be checked in the playground
 import VueRouter from '../src/vite'
-import {
-  getFileBasedRouteName,
-  getPascalCaseRouteName,
-  VueRouterAutoImports,
-} from '../src'
+import { VueRouterAutoImports } from '../src'
 import Vue from '@vitejs/plugin-vue'
 import AutoImport from 'unplugin-auto-import/vite'
+import Inspect from 'vite-plugin-inspect'
 
 export default defineConfig({
   clearScreen: false,
+  resolve: {
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+      '~': fileURLToPath(new URL('./src', import.meta.url)),
+      'unplugin-vue-router/runtime': fileURLToPath(
+        new URL('../src/runtime.ts', import.meta.url)
+      ),
+      'unplugin-vue-router/types': fileURLToPath(
+        new URL('../src/types.ts', import.meta.url)
+      ),
+      'unplugin-vue-router/data-loaders/basic': fileURLToPath(
+        new URL('../src/data-loaders/entries/basic.ts', import.meta.url)
+      ),
+      'unplugin-vue-router/data-loaders/pinia-colada': fileURLToPath(
+        new URL('../src/data-loaders/entries/pinia-colada.ts', import.meta.url)
+      ),
+      'unplugin-vue-router/data-loaders': fileURLToPath(
+        new URL('../src/data-loaders/entries/index.ts', import.meta.url)
+      ),
+    },
+  },
   build: {
     sourcemap: true,
   },
-  // optimizeDeps: {
-  //   exclude: ['ufo', 'mlly', 'magic-string', 'fsevents'],
-  // },
+  optimizeDeps: {
+    exclude: [
+      // easier to test with yalc
+      '@pinia/colada',
+    ],
+  },
 
   plugins: [
     VueRouter({
-      dataFetching: true,
-      extensions: ['.page.vue', '.vue', '.md'],
+      extensions: ['.page.vue', '.vue'],
+      importMode: 'async',
+      experimental: {
+        autoExportsDataLoaders: ['src/loaders/**/*', '@/loaders/**/*'],
+      },
       extendRoute(route) {
-        // console.log('extending route', route.meta)
+        route.params.forEach((param) => {
+          // transform kebab-case to camelCase
+          param.paramName = param.paramName.replace(/-([a-z])/g, (g) =>
+            g[1].toUpperCase()
+          )
+        })
 
         // example of deleting routes
         // if (route.name.startsWith('/users')) {
@@ -57,7 +86,7 @@ export default defineConfig({
           }
           route.delete()
           const newRoute = root.insert(
-            'custom.page.page.vue',
+            '/custom/page',
             route.components.get('default')!
           )
           // newRoute.components.set('default', route.components.get('default')!)
@@ -67,36 +96,43 @@ export default defineConfig({
         }
       },
       beforeWriteFiles(root) {
-        root.insert(
-          '/from-root',
-          '/Users/posva/unplugin-vue-router/playground/src/pages/index.vue'
-        )
+        root.insert('/from-root', join(__dirname, './src/pages/index.vue'))
       },
       routesFolder: [
         // can add multiple routes folders
         {
           src: 'src/pages',
-          // can even add params
-          // path: ':lang/',
         },
         {
           src: 'src/docs',
-          path: 'docs/:lang/',
-          filePatterns: ['*/**/*'],
+          path: 'docs/[lang]/',
+          // doesn't take into account files directly at src/docs, only subfolders
+          filePatterns: ['*/**'],
+          // ignores .vue files
           extensions: ['.md'],
         },
-        // {
-        //   src: 'src/features/',
-        //   path: 'features-prefix/',
-        // },
+        {
+          src: 'src/features',
+          filePatterns: '*/pages/**/*',
+          path: (file) => {
+            const prefix = 'src/features'
+            // +1 for the starting slash
+            file = file
+              .slice(file.lastIndexOf(prefix) + prefix.length + 1)
+              .replace('/pages', '')
+            // console.log('👉 FILE', file)
+            return file
+          },
+        },
       ],
       logs: true,
       // getRouteName: getPascalCaseRouteName,
       exclude: [
-        'ignored',
+        '**/ignored/**',
+        // '**/ignored/**/*',
         '**/__*',
         '**/__**/*',
-        '!*.component.vue',
+        '**/*.component.vue',
         // resolve(__dirname, './src/pages/ignored'),
         //
         // './src/pages/**/*.spec.ts',
@@ -105,15 +141,25 @@ export default defineConfig({
     Vue({
       include: [/\.vue$/, /\.md$/],
     }),
-    Markdown(),
+    Markdown({}),
     AutoImport({
-      imports: [VueRouterAutoImports],
+      imports: [
+        VueRouterAutoImports,
+        {
+          // NOTE: we need to match the resolved paths to local files for development
+          // instead of just 'unplugin-vue-router/data-loaders/basic': ['defineBasicLoader'],
+          [fileURLToPath(
+            new URL('../src/data-loaders/entries/basic.ts', import.meta.url)
+          )]: ['defineBasicLoader'],
+          // [fileURLToPath(
+          //   new URL('../src/data-loaders/entries/pinia-colada.ts', import.meta.url)
+          // )]: ['defineColadaLoader'],
+        },
+      ],
     }),
+    // currently the devtools use 0.8.8 but we care more about
+    // inspecting virtual files
+    // VueDevtools(),
     Inspect(),
   ],
-  resolve: {
-    alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url)),
-    },
-  },
 })

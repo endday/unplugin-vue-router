@@ -1,25 +1,24 @@
 import { ResolvedOptions } from '../options'
-import { createPrefixTree, TreeNode } from './tree'
+import { TreeNode, PrefixTree } from './tree'
 import { promises as fs } from 'fs'
-import {
-  appendExtensionListToPattern,
-  asRoutePath,
-  logTree,
-  throttle,
-} from './utils'
+import { asRoutePath, ImportsMap, logTree, throttle } from './utils'
 import { generateRouteNamedMap } from '../codegen/generateRouteMap'
-import { MODULE_ROUTES_PATH, MODULE_VUE_ROUTER } from './moduleConstants'
+import { MODULE_ROUTES_PATH, MODULE_VUE_ROUTER_AUTO } from './moduleConstants'
 import { generateRouteRecord } from '../codegen/generateRouteRecords'
 import fg from 'fast-glob'
-import { resolve } from 'pathe'
+import { relative, resolve } from 'pathe'
 import { ServerContext } from '../options'
 import { getRouteBlock } from './customBlock'
-import { RoutesFolderWatcher, HandlerContext } from './RoutesFolderWatcher'
+import {
+  RoutesFolderWatcher,
+  HandlerContext,
+  resolveFolderOptions,
+} from './RoutesFolderWatcher'
 import { generateDTS as _generateDTS } from '../codegen/generateDTS'
 import { generateVueRouterProxy as _generateVueRouterProxy } from '../codegen/vueRouterModule'
-import { hasNamedExports } from '../data-fetching/parse'
 import { definePageTransform, extractDefinePageNameAndPath } from './definePage'
 import { EditableTreeNode } from './extendRoutes'
+import { isPackageExists as isPackageInstalled } from 'local-pkg'
 
 export function createRoutesContext(options: ResolvedOptions) {
   const { dts: preferDTS, root, routesFolder } = options
@@ -27,17 +26,21 @@ export function createRoutesContext(options: ResolvedOptions) {
     preferDTS === false
       ? false
       : preferDTS === true
-      ? resolve(root, 'typed-router.d.ts')
-      : resolve(root, preferDTS)
+        ? resolve(root, 'typed-router.d.ts')
+        : resolve(root, preferDTS)
 
-  const routeTree = createPrefixTree(options)
+  const routeTree = new PrefixTree(options)
   const editableRoutes = new EditableTreeNode(routeTree)
 
-  function log(...args: any[]) {
-    if (options.logs) {
-      console.log(...args)
-    }
-  }
+  const logger = new Proxy(console, {
+    get(target, prop) {
+      const res = Reflect.get(target, prop)
+      if (typeof res === 'function') {
+        return options.logs ? res : () => {}
+      }
+      return res
+    },
+  })
 
   // populated by the initial scan pages
   const watchers: RoutesFolderWatcher[] = []
@@ -54,45 +57,40 @@ export function createRoutesContext(options: ResolvedOptions) {
       return
     }
 
-    const globalPattern = appendExtensionListToPattern(
-      options.filePatterns,
-      options.extensions
-    )
-
     // get the initial list of pages
     await Promise.all(
-      routesFolder.map((folder) => {
-        if (startWatchers) {
-          watchers.push(setupWatcher(new RoutesFolderWatcher(folder, options)))
-        }
+      routesFolder
+        .map((folder) => resolveFolderOptions(options, folder))
+        .map((folder) => {
+          if (startWatchers) {
+            watchers.push(setupWatcher(new RoutesFolderWatcher(folder)))
+          }
 
-        // override the pattern if the folder has a custom pattern
-        const pattern = folder.filePatterns
-          ? appendExtensionListToPattern(
-              folder.filePatterns,
-              // also override the extensions if the folder has a custom extensions
-              folder.extensions || options.extensions
-            )
-          : globalPattern
+          // the ignore option must be relative to cwd or absolute
+          const ignorePattern = folder.exclude.map((f) =>
+            // if it starts with ** then it will work as expected
+            f.startsWith('**') ? f : relative(folder.src, f)
+          )
 
-        return fg(pattern, {
-          cwd: folder.src,
-          // TODO: do they return the symbolic link path or the original file?
-          // followSymbolicLinks: false,
-          ignore: folder.exclude || options.exclude,
-        })
-          .then((files) => files.map((file) => resolve(folder.src, file)))
-          .then((files) =>
+          return fg(folder.pattern, {
+            cwd: folder.src,
+            // TODO: do they return the symbolic link path or the original file?
+            // followSymbolicLinks: false,
+            ignore: ignorePattern,
+          }).then((files) =>
             Promise.all(
-              files.map((file) =>
-                addPage({
-                  routePath: asRoutePath(folder, file),
-                  filePath: file,
-                })
-              )
+              files
+                // ensure consistent files in Windows/Unix and absolute paths
+                .map((file) => resolve(folder.src, file))
+                .map((file) =>
+                  addPage({
+                    routePath: asRoutePath(folder, file),
+                    filePath: file,
+                  })
+                )
             )
           )
-      })
+        })
     )
 
     for (const route of editableRoutes) {
@@ -103,54 +101,64 @@ export function createRoutesContext(options: ResolvedOptions) {
     await _writeConfigFiles()
   }
 
-  async function writeRouteInfoToNode(node: TreeNode, path: string) {
-    const content = await fs.readFile(path, 'utf8')
-    // TODO: cache the result of parsing the SFC so the transform can reuse the parsing
-    node.hasDefinePage = content.includes('definePage')
-    const [definedPageNameAndPath, routeBlock] = await Promise.all([
-      extractDefinePageNameAndPath(content, path),
-      getRouteBlock(path, options),
-    ])
+  async function writeRouteInfoToNode(node: TreeNode, filePath: string) {
+    const content = await fs.readFile(filePath, 'utf8')
+    // TODO: cache the result of parsing the SFC (in the extractDefinePageAndName) so the transform can reuse the parsing
+    node.hasDefinePage ||= content.includes('definePage')
+    // TODO: track if it changed and to not always trigger HMR
+    const definedPageNameAndPath = extractDefinePageNameAndPath(
+      content,
+      filePath
+    )
+    // TODO: track if it changed and if generateRoutes should be called again
+    const routeBlock = getRouteBlock(filePath, content, options)
     // TODO: should warn if hasDefinePage and customRouteBlock
-    // if (routeBlock) log(routeBlock)
-    node.setCustomRouteBlock(path, { ...routeBlock, ...definedPageNameAndPath })
-    node.value.includeLoaderGuard =
-      options.dataFetching && (await hasNamedExports(path))
+    // if (routeBlock) logger.log(routeBlock)
+    node.setCustomRouteBlock(filePath, {
+      ...routeBlock,
+      ...definedPageNameAndPath,
+    })
   }
 
   async function addPage(
     { filePath, routePath }: HandlerContext,
     triggerExtendRoute = false
   ) {
-    log(`added "${routePath}" for "${filePath}"`)
-    // TODO: handle top level named view HMR
+    logger.log(`added "${routePath}" for "${filePath}"`)
     const node = routeTree.insert(routePath, filePath)
-
     await writeRouteInfoToNode(node, filePath)
 
     if (triggerExtendRoute) {
       await options.extendRoute?.(new EditableTreeNode(node))
     }
+
+    // TODO: trigger HMR vue-router/auto
+    server?.updateRoutes()
   }
 
   async function updatePage({ filePath, routePath }: HandlerContext) {
-    log(`updated "${routePath}" for "${filePath}"`)
+    logger.log(`updated "${routePath}" for "${filePath}"`)
     const node = routeTree.getChild(filePath)
     if (!node) {
-      console.warn(`Cannot update "${filePath}": Not found.`)
+      logger.warn(`Cannot update "${filePath}": Not found.`)
       return
     }
     await writeRouteInfoToNode(node, filePath)
     await options.extendRoute?.(new EditableTreeNode(node))
+    // no need to manually trigger the update of vue-router/auto-routes because
+    // the change of the vue file will trigger HMR
   }
 
   function removePage({ filePath, routePath }: HandlerContext) {
-    log(`remove "${routePath}" for "${filePath}"`)
+    logger.log(`remove "${routePath}" for "${filePath}"`)
     routeTree.removeChild(filePath)
+    // TODO: HMR vue-router/auto
+    server?.updateRoutes()
   }
 
   function setupWatcher(watcher: RoutesFolderWatcher) {
-    log(`🤖 Scanning files in ${watcher.src}`)
+    logger.log(`🤖 Scanning files in ${watcher.src}`)
+
     return watcher
       .on('change', async (ctx) => {
         await updatePage(ctx)
@@ -160,78 +168,96 @@ export function createRoutesContext(options: ResolvedOptions) {
         await addPage(ctx, true)
         writeConfigFiles()
       })
-      .on('unlink', async (ctx) => {
-        await removePage(ctx)
+      .on('unlink', (ctx) => {
+        removePage(ctx)
         writeConfigFiles()
       })
+
+    // TODO: handle folder removal: apparently chokidar only emits a raw event when deleting a folder instead of the
+    // unlinkDir event
   }
 
   function generateRoutes() {
-    // keys are import names while values are paths import __ from __
-    // TODO: reverse the order and make a list of named imports and another for defaults?
-    const importList = new Map<string, string>()
+    const importsMap = new ImportsMap()
 
-    const routesExport = `export const routes = ${generateRouteRecord(
+    const routeList = `export const routes = ${generateRouteRecord(
       routeTree,
       options,
-      importList
-    )}`
+      importsMap
+    )}\n`
+
+    let hmr = `
+export function handleHotUpdate(_router) {
+  if (import.meta.hot) {
+    import.meta.hot.data.router = _router
+  }
+}
+
+if (import.meta.hot) {
+  import.meta.hot.accept((mod) => {
+    const router = import.meta.hot.data.router
+    if (!router) {
+      import.meta.hot.invalidate('[unplugin-vue-router:HMR] Cannot replace the routes because there is no active router. Reloading.')
+      return
+    }
+    router.clearRoutes()
+    for (const route of mod.routes) {
+      router.addRoute(route)
+    }
+    router.replace('')
+  })
+}
+`
 
     // generate the list of imports
-    let imports = ''
-    if (options.dataFetching) {
-      imports += `import { _HasDataLoaderMeta, _mergeRouteRecord } from 'unplugin-vue-router/runtime'\n`
-    }
-    for (const [name, path] of importList) {
-      imports += `import ${name} from '${path}'\n`
-    }
-
+    let imports = importsMap.toString()
     // add an empty line for readability
     if (imports) {
       imports += '\n'
     }
 
+    const newAutoRoutes = `${imports}${routeList}${hmr}\n`
+
     // prepend it to the code
-    return `${imports}${routesExport}\n`
+    return newAutoRoutes
   }
 
   function generateDTS(): string {
     return _generateDTS({
-      vueRouterModule: MODULE_VUE_ROUTER,
+      vueRouterModule: MODULE_VUE_ROUTER_AUTO,
       routesModule: MODULE_ROUTES_PATH,
-      routeNamedMap: generateRouteNamedMap(routeTree)
-        .split('\n')
-        .filter((line) => line) // remove empty lines
-        .map((line) => '  ' + line) // Indent by two spaces
-        .join('\n'),
+      routeNamedMap: generateRouteNamedMap(routeTree),
     })
   }
 
-  // NOTE: this code needs to be generated because otherwise it doesn't go through transforms and `vue-router/auto/routes`
+  // NOTE: this code needs to be generated because otherwise it doesn't go through transforms and `vue-router/auto-routes`
   // cannot be resolved.
+  const isPiniaColadaInstalled = isPackageInstalled('@pinia/colada')
   function generateVueRouterProxy() {
-    return _generateVueRouterProxy(MODULE_ROUTES_PATH, options)
+    return _generateVueRouterProxy(MODULE_ROUTES_PATH, options, {
+      addPiniaColada: isPiniaColadaInstalled,
+    })
   }
 
   let lastDTS: string | undefined
   async function _writeConfigFiles() {
-    log('💾 writing...')
+    logger.time('writeConfigFiles')
 
     if (options.beforeWriteFiles) {
       await options.beforeWriteFiles(editableRoutes)
+      logger.timeLog('writeConfigFiles', 'beforeWriteFiles()')
     }
 
-    logTree(routeTree, log)
+    logTree(routeTree, logger.log)
     if (dts) {
       const content = generateDTS()
       if (lastDTS !== content) {
         await fs.writeFile(dts, content, 'utf-8')
+        logger.timeLog('writeConfigFiles', 'wrote dts file')
         lastDTS = content
-        server?.invalidate(MODULE_ROUTES_PATH)
-        server?.invalidate(MODULE_VUE_ROUTER)
-        server?.reload()
       }
     }
+    logger.timeEnd('writeConfigFiles')
   }
 
   // debounce of 100ms + throttle of 500ms
@@ -241,9 +267,7 @@ export function createRoutesContext(options: ResolvedOptions) {
 
   function stopWatcher() {
     if (watchers.length) {
-      if (options.logs) {
-        console.log('🛑 stopping watcher')
-      }
+      logger.log('🛑 stopping watcher')
       watchers.forEach((watcher) => watcher.close())
     }
   }

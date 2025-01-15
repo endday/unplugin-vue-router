@@ -33,13 +33,12 @@ export class EditableTreeNode {
   /**
    * Inserts a new route as a child of this route. This route cannot use `definePage()`. If it was meant to be included,
    * add it to the `routesFolder` option.
+   *
+   * @param path - path segment to insert. Note this is relative to the current route. **It shouldn't start with `/`**. If it does, it will be added to the root of the tree.
+   * @param filePath - file path
+   * @returns the new editable route node
    */
   insert(path: string, filePath: string) {
-    const extDotIndex = filePath.lastIndexOf('.')
-    const ext = filePath.slice(extDotIndex)
-    if (!path.endsWith(ext)) {
-      path += ext
-    }
     // adapt paths as they should match a file system
     let addBackLeadingSlash = false
     if (path.startsWith('/')) {
@@ -49,7 +48,7 @@ export class EditableTreeNode {
       // but in other places we need to instruct the path is at the root so we change it afterwards
       addBackLeadingSlash = !this.node.isRoot()
     }
-    const node = this.node.insert(path, filePath)
+    const node = this.node.insertParsedPath(path, filePath)
     const editable = new EditableTreeNode(node)
     if (addBackLeadingSlash) {
       editable.path = '/' + node.path
@@ -67,16 +66,25 @@ export class EditableTreeNode {
 
   /**
    * Return a Map of the files associated to the current route. The key of the map represents the name of the view (Vue
-   * Router feature) while the value is the file path. By default, the name of the view is `default`.
+   * Router feature) while the value is the **resolved** file path.
+   * By default, the name of the view is `default`.
    */
   get components() {
     return this.node.value.components
   }
 
   /**
+   * Alias for `route.components.get('default')`.
+   */
+  get component() {
+    return this.node.value.components.get('default')
+  }
+
+  /**
    * Name of the route. Note that **all routes are named** but when the final `routes` array is generated, routes
    * without a `component` will not include their `name` property to avoid accidentally navigating to them and display
-   * nothing. {@see isPassThrough}
+   * nothing.
+   * @see {@link isPassThrough}
    */
   get name(): string {
     return this.node.name
@@ -106,7 +114,8 @@ export class EditableTreeNode {
 
   /**
    * Override the meta property of the route. This will discard any other meta property defined with `<route>` blocks or
-   * through other means.
+   * through other means. If you want to keep the existing meta properties, use `addToMeta`.
+   * @see {@link addToMeta}
    */
   set meta(meta: RouteMeta) {
     this.node.value.removeOverride('meta')
@@ -159,7 +168,8 @@ export class EditableTreeNode {
   }
 
   /**
-   * Array of the route params and all of its parent's params.
+   * Array of the route params and all of its parent's params. Note that changing the params will not update the path,
+   * you need to update both.
    */
   get params() {
     return this.node.params

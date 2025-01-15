@@ -1,9 +1,16 @@
-import type { ResolvedOptions } from '../options'
-import { createTreeNodeValue, TreeRouteParam } from './treeNodeValue'
+import { type ResolvedOptions } from '../options'
+import {
+  createTreeNodeValue,
+  TreeNodeValueOptions,
+  TreeRouteParam,
+} from './treeNodeValue'
 import type { TreeNodeValue } from './treeNodeValue'
-import { trimExtension } from './utils'
 import { CustomRouteBlock } from './customBlock'
 import { RouteMeta } from 'vue-router'
+
+export interface TreeNodeOptions extends ResolvedOptions {
+  treeNodeOptions?: TreeNodeValueOptions
+}
 
 export class TreeNode {
   /**
@@ -19,54 +26,108 @@ export class TreeNode {
   /**
    * Parent node.
    */
-  parent?: TreeNode
+  parent: TreeNode | undefined
 
   /**
    * Plugin options taken into account by the tree.
    */
-  options: ResolvedOptions
+  options: TreeNodeOptions
 
+  // FIXME: refactor this code. It currently helps to keep track if a page has at least one component with `definePage()` but it doesn't tell which. It should keep track of which one while still caching the result per file.
   /**
    * Should this page import the page info
    */
   hasDefinePage: boolean = false
 
-  constructor(options: ResolvedOptions, filePath: string, parent?: TreeNode) {
+  /**
+   * Creates a new tree node.
+   *
+   * @param options - TreeNodeOptions shared by all nodes
+   * @param pathSegment - path segment of this node e.g. `users` or `:id`
+   * @param parent
+   */
+  constructor(
+    options: TreeNodeOptions,
+    pathSegment: string,
+    parent?: TreeNode
+  ) {
     this.options = options
     this.parent = parent
-    this.value = createTreeNodeValue(filePath, parent?.value)
+    this.value = createTreeNodeValue(
+      pathSegment,
+      parent?.value,
+      options.treeNodeOptions || options.pathParser
+    )
   }
 
   /**
    * Adds a path to the tree. `path` cannot start with a `/`.
    *
-   * @param path - path segment to insert. **It must contain the file extension** this allows to
-   * differentiate between folders and files.
-   * @param filePath - file path, defaults to path for convenience and testing
+   * @param path - path segment to insert. **It shouldn't contain the file extension**
+   * @param filePath - file path, must be a file (not a folder)
    */
-  insert(path: string, filePath: string = path): TreeNode {
-    const { tail, segment, viewName, isComponent } = splitFilePath(
-      path,
-      this.options
-    )
+  insert(path: string, filePath: string): TreeNode {
+    const { tail, segment, viewName } = splitFilePath(path)
 
     if (!this.children.has(segment)) {
       this.children.set(segment, new TreeNode(this.options, segment, this))
     } // TODO: else error or still override?
     const child = this.children.get(segment)!
 
-    if (isComponent) {
+    // we reached the end of the filePath, therefore it's a component
+    if (!tail) {
       child.value.components.set(viewName, filePath)
-    }
-
-    if (tail) {
+    } else {
       return child.insert(tail, filePath)
     }
     return child
   }
 
-  setCustomRouteBlock(path: string, routeBlock: CustomRouteBlock | undefined) {
-    this.value.setOverride(path, routeBlock)
+  /**
+   * Adds a path that has already been parsed to the tree. `path` cannot start with a `/`. This method is similar to
+   * `insert` but the path argument should be already parsed. e.g. `users/:id` for a file named `users/[id].vue`.
+   *
+   * @param path - path segment to insert, already parsed (e.g. users/:id)
+   * @param filePath - file path, defaults to path for convenience and testing
+   */
+  insertParsedPath(path: string, filePath: string = path): TreeNode {
+    // TODO: allow null filePath?
+    const isComponent = true
+
+    const node = new TreeNode(
+      {
+        ...this.options,
+        // force the format to raw
+        treeNodeOptions: {
+          ...this.options.pathParser,
+          format: 'path',
+        },
+      },
+      path,
+      this
+    )
+    this.children.set(path, node)
+
+    if (isComponent) {
+      // TODO: allow a way to set the view name
+      node.value.components.set('default', filePath)
+    }
+
+    return node
+  }
+
+  /**
+   * Saves a custom route block for a specific file path. The file path is used as a key. Some special file paths will
+   * have a lower or higher priority.
+   *
+   * @param filePath - file path where the custom block is located
+   * @param routeBlock - custom block to set
+   */
+  setCustomRouteBlock(
+    filePath: string,
+    routeBlock: CustomRouteBlock | undefined
+  ) {
+    this.value.setOverride(filePath, routeBlock)
   }
 
   getSortedChildren() {
@@ -79,7 +140,6 @@ export class TreeNode {
    * Delete and detach itself from the tree.
    */
   delete() {
-    // TODO: rename remove to removeChild
     if (!this.parent) {
       throw new Error('Cannot delete the root node.')
     }
@@ -89,16 +149,14 @@ export class TreeNode {
   }
 
   /**
-   * Remove a route from the tree. The path shouldn't start with a `/` but it can be a nested one. e.g. `foo/bar.vue`.
+   * Remove a route from the tree. The path shouldn't start with a `/` but it can be a nested one. e.g. `foo/bar`.
    * The `path` should be relative to the page folder.
    *
    * @param path - path segment of the file
    */
   remove(path: string) {
-    const { tail, segment, viewName, isComponent } = splitFilePath(
-      path,
-      this.options
-    )
+    // TODO: rename remove to removeChild
+    const { tail, segment, viewName } = splitFilePath(path)
 
     const child = this.children.get(segment)
     if (!child) {
@@ -115,9 +173,7 @@ export class TreeNode {
       }
     } else {
       // it can only be component because we only listen for removed files, not folders
-      if (isComponent) {
-        child.value.components.delete(viewName)
-      }
+      child.value.components.delete(viewName)
       // this is the file we wanted to remove
       if (child.children.size === 0 && child.value.components.size === 0) {
         this.children.delete(segment)
@@ -153,13 +209,9 @@ export class TreeNode {
    * Returns the meta property as an object.
    */
   get metaAsObject(): Readonly<RouteMeta> {
-    const meta = {
+    return {
       ...this.value.overrides.meta,
     }
-    if (this.value.includeLoaderGuard) {
-      meta._loaderGuard = true
-    }
-    return meta
   }
 
   /**
@@ -194,7 +246,9 @@ export class TreeNode {
    * @returns true if the node is the root node
    */
   isRoot() {
-    return this.value.path === '/' && !this.value.components.size
+    return (
+      !this.parent && this.value.path === '/' && !this.value.components.size
+    )
   }
 
   toString(): string {
@@ -221,20 +275,26 @@ export class PrefixTree extends TreeNode {
     super(options, '')
   }
 
-  insert(path: string, filePath: string = path) {
+  override insert(path: string, filePath: string) {
     const node = super.insert(path, filePath)
     this.map.set(filePath, node)
 
     return node
   }
 
+  /**
+   * Returns the tree node of the given file path.
+   *
+   * @param filePath - file path of the tree node to get
+   */
   getChild(filePath: string) {
     return this.map.get(filePath)
   }
 
   /**
+   * Removes the tree node of the given file path.
    *
-   * @param filePath -
+   * @param filePath - file path of the tree node to remove
    */
   removeChild(filePath: string) {
     if (this.map.has(filePath)) {
@@ -244,26 +304,18 @@ export class PrefixTree extends TreeNode {
   }
 }
 
-export function createPrefixTree(options: ResolvedOptions) {
-  return new PrefixTree(options)
-}
-
 /**
  * Splits a path into by finding the first '/' and returns the tail and segment. If it has an extension, it removes it.
  * If it contains a named view, it returns the view name as well (otherwise it's default).
  *
  * @param filePath - filePath to split
  */
-function splitFilePath(filePath: string, options: ResolvedOptions) {
+function splitFilePath(filePath: string) {
   const slashPos = filePath.indexOf('/')
   let head = slashPos < 0 ? filePath : filePath.slice(0, slashPos)
   const tail = slashPos < 0 ? '' : filePath.slice(slashPos + 1)
 
   let segment = head
-  // only the last segment can be a filename with an extension
-  if (!tail) {
-    segment = trimExtension(head, options.extensions)
-  }
   let viewName = 'default'
 
   const namedSeparatorPos = segment.indexOf('@')
@@ -273,12 +325,9 @@ function splitFilePath(filePath: string, options: ResolvedOptions) {
     segment = segment.slice(0, namedSeparatorPos)
   }
 
-  const isComponent = segment !== head
-
   return {
     segment,
     tail,
     viewName,
-    isComponent,
   }
 }
